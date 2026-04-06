@@ -1,0 +1,53 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno y configuraciones sensibles
+.env
+.env.local
+.env.development
+.env.production
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Base de datos locales
+*.sqlite
+*.db
+
+# IDEs y editores
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generados
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Archivos temporales
+*.tmp
+*.temp
+
+# Archivos de cobertura de pruebas
+coverage/
+.nyc_output/
+
+# Runtime
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Archivos de build (si los usas más adelante)
+dist/
+build/
