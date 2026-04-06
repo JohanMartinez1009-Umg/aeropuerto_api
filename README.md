@@ -20,7 +20,7 @@ API RESTful para el Sistema de Gestión de Aeropuerto (SGA) desarrollada con Nod
 
 1. **Clonar el repositorio:**
    ```bash
-   git clone <tu-repo>
+   git clone JohanMartinez1009-Umg/aeropuerto_api
    cd aeropuerto_api
    ```
 
