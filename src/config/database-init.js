@@ -872,9 +872,9 @@ const DATOS_INICIALES = {
   ],
 
   SGA_TERMINAL: [
-    "INSERT INTO SGA_TERMINAL VALUES (1, 'TERMINAL 1')",
-    "INSERT INTO SGA_TERMINAL VALUES (2, 'TERMINAL 2')",
-    "INSERT INTO SGA_TERMINAL VALUES (3, 'TERMINAL 3')"
+    "INSERT INTO SGA_TERMINAL VALUES (1, 1, 'TERMINAL 1')",
+    "INSERT INTO SGA_TERMINAL VALUES (2, 2, 'TERMINAL 2')",
+    "INSERT INTO SGA_TERMINAL VALUES (3, 3, 'TERMINAL 3')"
   ],
 
   SGA_TIPO_EVENTO: [
@@ -998,78 +998,174 @@ const DATOS_INICIALES = {
   ]
 };
 
+// ===== UTILIDADES ACID PARA INICIALIZACIÓN =====
+
+// Función utilitaria para ejecutar operaciones con transacción ACID
+async function ejecutarConTransaccion(connection, operacion, descripcion) {
+  console.log(`🚀 Iniciando transacción: ${descripcion}`);
+  
+  try {
+    // Ejecutar la operación (la transacción inicia automáticamente con autoCommit=false)
+    const resultado = await operacion(connection);
+    
+    // Confirmar transacción
+    await connection.commit();
+    console.log(`✅ Transaction COMMITTED - ${descripcion}`);
+    
+    return { 
+      exito: true, 
+      resultado,
+      transaccion: 'COMMITTED',
+      descripcion 
+    };
+    
+  } catch (error) {
+    // Rollback en caso de error
+    try {
+      await connection.rollback();
+      console.log(`❌ Transaction ROLLED_BACK - ${descripcion}: ${error.message}`);
+    } catch (rollbackError) {
+      console.log(`💥 Error en ROLLBACK - ${descripcion}: ${rollbackError.message}`);
+    }
+    
+    return { 
+      exito: false, 
+      error: error.message,
+      transaccion: 'ROLLED_BACK',
+      descripcion 
+    };
+  }
+}
+
 // Función para verificar si una tabla existe
 async function verificarTablaExiste(connection, nombreTabla) {
   try {
     const result = await connection.execute(
-      `SELECT COUNT(*) AS EXISTE FROM USER_TABLES WHERE TABLE_NAME = :tabla`,
-      [nombreTabla],
-      { outFormat: 1 } // OUT_FORMAT_OBJECT
+      `SELECT COUNT(*) FROM USER_TABLES WHERE TABLE_NAME = :tabla`,
+      [nombreTabla]
     );
-    return result.rows[0].EXISTE > 0;
+    return result.rows[0][0] > 0;
   } catch (error) {
     return false;
   }
 }
 
-// Función para crear una tabla específica
+// Función para crear una tabla específica con transacción ACID
 async function crearTabla(connection, nombreTabla, sqlCreacion) {
-  try {
-    const existe = await verificarTablaExiste(connection, nombreTabla.toUpperCase());
+  const operacion = async (conn) => {
+    const existe = await verificarTablaExiste(conn, nombreTabla.toUpperCase());
     
     if (existe) {
       console.log(`⚠️  La tabla ${nombreTabla} ya existe, omitiendo...`);
       return { tabla: nombreTabla, estado: 'YA_EXISTE' };
     }
 
-    await connection.execute(sqlCreacion);
+    await conn.execute(sqlCreacion);
     console.log(`✅ Tabla ${nombreTabla} creada exitosamente`);
     return { tabla: nombreTabla, estado: 'CREADA' };
-    
-  } catch (error) {
-    console.log(`❌ Error creando tabla ${nombreTabla}:`, error.message);
-    return { tabla: nombreTabla, estado: 'ERROR', error: error.message };
+  };
+
+  const resultadoTransaccion = await ejecutarConTransaccion(
+    connection, 
+    operacion, 
+    `Crear tabla ${nombreTabla}`
+  );
+
+  if (resultadoTransaccion.exito) {
+    return resultadoTransaccion.resultado;
+  } else {
+    console.log(`❌ Error creando tabla ${nombreTabla}:`, resultadoTransaccion.error);
+    return { 
+      tabla: nombreTabla, 
+      estado: 'ERROR', 
+      error: resultadoTransaccion.error,
+      transaccion: resultadoTransaccion.transaccion
+    };
   }
 }
 
-// Función para insertar datos iniciales
+// Función para insertar datos iniciales con transacción ACID
 async function insertarDatosIniciales(connection, nombreTabla, datos) {
-  if (!datos || datos.length === 0) return { tabla: nombreTabla, registros: 0 };
+  if (!datos || datos.length === 0) return { tabla: nombreTabla, registos: 0 };
   
-  let insertados = 0;
-  
-  for (const sql of datos) {
-    try {
-      await connection.execute(sql);
-      insertados++;
-    } catch (error) {
-      // Ignorar errores de duplicados y continuar
-      if (!error.message.includes('ORA-00001')) {
-        console.log(`⚠️  Error insertando en ${nombreTabla}: ${error.message}`);
+  const operacion = async (conn) => {
+    let insertados = 0;
+    const errores = [];
+    
+    for (const sql of datos) {
+      try {
+        // Agregar DELETED=0 y FECHA_ELIMINACION=NULL a INSERTs posicionales
+        const sqlFinal = /^INSERT INTO \S+\s+VALUES\s*\(/i.test(sql.trim())
+          ? sql.trim().replace(/\)\s*$/, ', 0, NULL)')
+          : sql;
+        await conn.execute(sqlFinal);
+        insertados++;
+      } catch (error) {
+        // Solo continuar con duplicados, otros errores son fatales
+        if (error.message.includes('ORA-00001')) {
+          // Duplicado - continuar
+          continue;
+        } else {
+          errores.push({
+            sql: sql.substring(0, 100) + '...',
+            error: error.message
+          });
+          // Para mantener integridad ACID, fallar toda la transacción
+          throw error;
+        }
       }
     }
+    
+    return { insertados, errores };
+  };
+
+  const resultadoTransaccion = await ejecutarConTransaccion(
+    connection, 
+    operacion, 
+    `Insertar datos iniciales en ${nombreTabla}`
+  );
+
+  if (resultadoTransaccion.exito) {
+    const { insertados } = resultadoTransaccion.resultado;
+    if (insertados > 0) {
+      console.log(`📄 ${insertados} registros insertados en ${nombreTabla}`);
+    }
+    return { 
+      tabla: nombreTabla, 
+      registros: insertados,
+      transaccion: 'COMMITTED'
+    };
+  } else {
+    console.log(`❌ Error insertando datos en ${nombreTabla}:`, resultadoTransaccion.error);
+    return { 
+      tabla: nombreTabla, 
+      registros: 0, 
+      error: resultadoTransaccion.error,
+      transaccion: 'ROLLED_BACK'
+    };
   }
-  
-  if (insertados > 0) {
-    console.log(`📄 ${insertados} registros insertados en ${nombreTabla}`);
-  }
-  
-  return { tabla: nombreTabla, registros: insertados };
 }
 
-// Función principal para inicializar toda la base de datos
+// Función principal para inicializar toda la base de datos con ACID
 async function inicializarBaseDatos(incluirDatos = true) {
   let connection;
   const resultado = {
     tablas_procesadas: [],
     datos_insertados: [],
     errores: [],
+    transacciones: [],
     resumen: {}
   };
 
+  const inicioTiempo = Date.now();
+
   try {
     connection = await getConnection();
-    console.log('🚀 Iniciando creación completa del Sistema de Gestión de Aeropuerto (SGA)...\n');
+    console.log('🚀 Iniciando creación completa del Sistema de Gestión de Aeropuerto (SGA) con ACID compliance...\n');
+
+    // ===== FASE 1: CREACIÓN DE TABLAS CON TRANSACCIONES ACID =====
+    console.log('📊 FASE 1: Creación de tablas del esquema SGA');
+    console.log('═'.repeat(60));
 
     // Crear tablas en orden (respetando dependencias FK)
     const ordenCreacion = [
@@ -1100,18 +1196,35 @@ async function inicializarBaseDatos(incluirDatos = true) {
       'SGA_ASIGNACION_PISTA'
     ];
     
-    for (const nombreTabla of ordenCreacion) {
+    // Procesar creación de tablas con transacciones individuales
+    for (let i = 0; i < ordenCreacion.length; i++) {
+      const nombreTabla = ordenCreacion[i];
+      console.log(`[${i + 1}/${ordenCreacion.length}] Procesando tabla: ${nombreTabla}`);
+      
       const resultadoTabla = await crearTabla(connection, nombreTabla, TABLAS_SCHEMA[nombreTabla]);
       resultado.tablas_procesadas.push(resultadoTabla);
       
       if (resultadoTabla.estado === 'ERROR') {
         resultado.errores.push(resultadoTabla);
+        console.log(`❌ Error crítico en tabla ${nombreTabla}, continuando...`);
+      }
+
+      if (resultadoTabla.transaccion) {
+        resultado.transacciones.push({
+          tipo: 'CREATE_TABLE',
+          objeto: nombreTabla,
+          estado: resultadoTabla.transaccion,
+          timestamp: new Date().toISOString()
+        });
       }
     }
 
-    // Insertar datos iniciales si se solicita
+    console.log(`\n✅ Fase 1 completada: ${resultado.tablas_procesadas.length} tablas procesadas`);
+
+    // ===== FASE 2: INSERCIÓN DE DATOS INICIALES CON TRANSACCIONES ACID =====
     if (incluirDatos) {
-      console.log('\n📊 Insertando datos iniciales del SGA...');
+      console.log('\n📊 FASE 2: Inserción de datos iniciales del SGA');
+      console.log('═'.repeat(60));
       
       const ordenDatos = [
         'SGA_PAIS', 'SGA_CIUDAD', 
@@ -1129,54 +1242,153 @@ async function inicializarBaseDatos(incluirDatos = true) {
         'SGA_AEROPUERTO', 'SGA_AEROLINEA', 'SGA_MODELO_AVION', 'SGA_AVION'
       ];
       
-      for (const nombreTabla of ordenDatos) {
+      // Procesar inserción de datos con transacciones individuales
+      for (let i = 0; i < ordenDatos.length; i++) {
+        const nombreTabla = ordenDatos[i];
+        
         if (DATOS_INICIALES[nombreTabla]) {
+          console.log(`[${i + 1}/${ordenDatos.length}] Insertando datos en: ${nombreTabla}`);
+          
           const resultadoDatos = await insertarDatosIniciales(
             connection, 
             nombreTabla, 
             DATOS_INICIALES[nombreTabla]
           );
+          
           resultado.datos_insertados.push(resultadoDatos);
+          
+          if (resultadoDatos.error) {
+            resultado.errores.push(resultadoDatos);
+            console.log(`❌ Error en datos de ${nombreTabla}, continuando...`);
+          }
+
+          if (resultadoDatos.transaccion) {
+            resultado.transacciones.push({
+              tipo: 'INSERT_DATA',
+              objeto: nombreTabla,
+              registros: resultadoDatos.registros,
+              estado: resultadoDatos.transaccion,
+              timestamp: new Date().toISOString()
+            });
+          }
         }
       }
       
-      await connection.commit();
-      console.log('💾 Datos del SGA guardados exitosamente');
+      console.log(`\n✅ Fase 2 completada: Datos insertados en ${resultado.datos_insertados.length} tablas`);
     }
 
-    // Generar resumen
+    // ===== TRANSACCIÓN FINAL DE CONFIRMACIÓN =====
+    const operacionFinal = async (conn) => {
+      // Verificar integridad final del sistema
+      const verificacion = await conn.execute(`
+        SELECT COUNT(*) as TOTAL_TABLAS 
+        FROM USER_TABLES 
+        WHERE TABLE_NAME LIKE 'SGA_%'
+      `);
+      
+      return {
+        tablas_sga_en_bd: verificacion.rows[0][0],
+        tablas_esperadas: ordenCreacion.length
+      };
+    };
+
+    const verificacionFinal = await ejecutarConTransaccion(
+      connection, 
+      operacionFinal, 
+      'Verificación final de integridad del sistema SGA'
+    );
+
+    if (verificacionFinal.exito) {
+      resultado.verificacion_final = verificacionFinal.resultado;
+      resultado.transacciones.push({
+        tipo: 'SYSTEM_VERIFICATION',
+        estado: 'COMMITTED',
+        detalles: verificacionFinal.resultado,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // ===== GENERAR RESUMEN COMPLETO =====
+    const tiempoTotal = Date.now() - inicioTiempo;
+    
     resultado.resumen = {
       tablas_creadas: resultado.tablas_procesadas.filter(t => t.estado === 'CREADA').length,
       tablas_existentes: resultado.tablas_procesadas.filter(t => t.estado === 'YA_EXISTE').length,
-      tablas_con_error: resultado.errores.length,
-      total_registros: resultado.datos_insertados.reduce((sum, d) => sum + d.registros, 0)
+      tablas_con_error: resultado.errores.filter(e => e.tabla).length,
+      total_registros: resultado.datos_insertados.reduce((sum, d) => sum + d.registros, 0),
+      transacciones_realizadas: resultado.transacciones.length,
+      transacciones_exitosas: resultado.transacciones.filter(t => t.estado === 'COMMITTED').length,
+      transacciones_fallidas: resultado.transacciones.filter(t => t.estado === 'ROLLED_BACK').length,
+      tiempo_total_ms: tiempoTotal,
+      tiempo_total_seg: (tiempoTotal / 1000).toFixed(2),
+      integridad_acid: resultado.errores.length === 0 ? 'COMPLETA' : 'PARCIAL'
     };
 
-    console.log('\n🎉 Inicialización del Sistema SGA completada!');
+    console.log('\n🎉 Inicialización del Sistema SGA completada con ACID compliance!');
+    console.log('═'.repeat(70));
+    console.log(`📊 Resumen de transacciones ACID:`);
+    console.log(`   • Transacciones totales: ${resultado.resumen.transacciones_realizadas}`);
+    console.log(`   • Transacciones exitosas (COMMITTED): ${resultado.resumen.transacciones_exitosas}`);
+    console.log(`   • Transacciones fallidas (ROLLED_BACK): ${resultado.resumen.transacciones_fallidas}`);
+    console.log(`   • Integridad ACID: ${resultado.resumen.integridad_acid}`);
+    console.log(`   • Tiempo total: ${resultado.resumen.tiempo_total_seg}s`);
+    console.log('═'.repeat(70));
+
     return resultado;
 
   } catch (error) {
     console.error('💥 Error fatal en inicialización SGA:', error.message);
+    
+    // Registrar error fatal con rollback general
+    resultado.transacciones.push({
+      tipo: 'SYSTEM_ERROR',
+      error: error.message,
+      estado: 'ROLLED_BACK',
+      timestamp: new Date().toISOString()
+    });
+    
     resultado.errores.push({ error_fatal: error.message });
+    
+    // Intentar rollback general si hay conexión
+    if (connection) {
+      try {
+        await connection.rollback();
+        console.log('🔄 Rollback general ejecutado por error fatal');
+      } catch (rollbackError) {
+        console.error('💥 Error en rollback general:', rollbackError.message);
+      }
+    }
+    
     throw error;
     
   } finally {
     if (connection) {
       try {
         await connection.close();
+        console.log('🔌 Conexión de base de datos cerrada correctamente');
       } catch (err) {
-        console.error('Error cerrando conexión:', err);
+        console.error('❌ Error cerrando conexión:', err.message);
       }
     }
   }
 }
 
-// Función para eliminar todas las tablas SGA (útil para desarrollo)
+// Función para eliminar todas las tablas SGA con transacciones ACID (útil para desarrollo)
 async function eliminarTodasLasTablas() {
   let connection;
+  const resultado = {
+    tablas_eliminadas: [],
+    errores: [],
+    transacciones: [],
+    resumen: {}
+  };
+
+  const inicioTiempo = Date.now();
+
   try {
     connection = await getConnection();
-    console.log('🗑️  Eliminando todas las tablas del SGA...');
+    console.log('🗑️  Eliminando todas las tablas del SGA con ACID compliance...');
+    console.log('═'.repeat(60));
     
     // Orden inverso para respetar dependencias FK
     const ordenEliminacion = [
@@ -1202,18 +1414,254 @@ async function eliminarTodasLasTablas() {
       'SGA_ESTADO_AEROLINEA', 'SGA_ESTADO_AEROPUERTO'
     ];
     
-    for (const tabla of ordenEliminacion) {
-      try {
-        await connection.execute(`DROP TABLE ${tabla} CASCADE CONSTRAINTS`);
-        console.log(`🗑️  Tabla ${tabla} eliminada`);
-      } catch (error) {
-        if (!error.message.includes('ORA-00942')) {
-          console.log(`⚠️  Error eliminando ${tabla}: ${error.message}`);
+    // Eliminar cada tabla con transacción individual ACID
+    for (let i = 0; i < ordenEliminacion.length; i++) {
+      const tabla = ordenEliminacion[i];
+      console.log(`[${i + 1}/${ordenEliminacion.length}] Eliminando tabla: ${tabla}`);
+      
+      const operacionEliminacion = async (conn) => {
+        await conn.execute(`DROP TABLE ${tabla} CASCADE CONSTRAINTS`);
+        return { tabla: tabla, estado: 'ELIMINADA' };
+      };
+
+      const resultadoTransaccion = await ejecutarConTransaccion(
+        connection, 
+        operacionEliminacion, 
+        `Eliminar tabla ${tabla}`
+      );
+
+      if (resultadoTransaccion.exito) {
+        console.log(`🗑️  Tabla ${tabla} eliminada exitosamente`);
+        resultado.tablas_eliminadas.push({
+          tabla: tabla,
+          estado: 'ELIMINADA',
+          transaccion: 'COMMITTED'
+        });
+        
+        resultado.transacciones.push({
+          tipo: 'DROP_TABLE',
+          objeto: tabla,
+          estado: 'COMMITTED',
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        // Si la tabla no existe, no es un error crítico
+        if (resultadoTransaccion.error.includes('ORA-00942')) {
+          console.log(`⚠️  Tabla ${tabla} no existe, omitiendo...`);
+          resultado.tablas_eliminadas.push({
+            tabla: tabla,
+            estado: 'NO_EXISTIA',
+            transaccion: 'N/A'
+          });
+        } else {
+          console.log(`❌ Error eliminando ${tabla}: ${resultadoTransaccion.error}`);
+          resultado.errores.push({
+            tabla: tabla,
+            error: resultadoTransaccion.error,
+            transaccion: 'ROLLED_BACK'
+          });
+          
+          resultado.transacciones.push({
+            tipo: 'DROP_TABLE',
+            objeto: tabla,
+            estado: 'ROLLED_BACK',
+            error: resultadoTransaccion.error,
+            timestamp: new Date().toISOString()
+          });
         }
       }
     }
     
-    console.log('✅ Eliminación del SGA completada');
+    // Verificación final con transacción ACID
+    const verificacionFinal = async (conn) => {
+      const result = await conn.execute(`
+        SELECT COUNT(*) as TABLAS_SGA_RESTANTES 
+        FROM USER_TABLES 
+        WHERE TABLE_NAME LIKE 'SGA_%'
+      `);
+      
+      return {
+        tablas_sga_restantes: result.rows[0][0],
+        eliminacion_completa: result.rows[0][0] === 0
+      };
+    };
+
+    const resultadoVerificacion = await ejecutarConTransaccion(
+      connection, 
+      verificacionFinal, 
+      'Verificación final de eliminación SGA'
+    );
+
+    // Generar resumen
+    const tiempoTotal = Date.now() - inicioTiempo;
+    
+    resultado.resumen = {
+      tablas_eliminadas: resultado.tablas_eliminadas.filter(t => t.estado === 'ELIMINADA').length,
+      tablas_no_existian: resultado.tablas_eliminadas.filter(t => t.estado === 'NO_EXISTIA').length,
+      tablas_con_error: resultado.errores.length,
+      transacciones_realizadas: resultado.transacciones.length,
+      transacciones_exitosas: resultado.transacciones.filter(t => t.estado === 'COMMITTED').length,
+      transacciones_fallidas: resultado.transacciones.filter(t => t.estado === 'ROLLED_BACK').length,
+      tiempo_total_ms: tiempoTotal,
+      tiempo_total_seg: (tiempoTotal / 1000).toFixed(2),
+      eliminacion_exitosa: resultadoVerificacion.exito && resultadoVerificacion.resultado?.eliminacion_completa
+    };
+
+    if (resultadoVerificacion.exito) {
+      resultado.verificacion_final = resultadoVerificacion.resultado;
+    }
+
+    console.log('\n✅ Eliminación del SGA completada con ACID compliance');
+    console.log('═'.repeat(60));
+    console.log(`📊 Resumen de eliminación:`);
+    console.log(`   • Tablas eliminadas: ${resultado.resumen.tablas_eliminadas}`);
+    console.log(`   • Tablas que no existían: ${resultado.resumen.tablas_no_existian}`);
+    console.log(`   • Errores en eliminación: ${resultado.resumen.tablas_con_error}`);
+    console.log(`   • Transacciones exitosas: ${resultado.resumen.transacciones_exitosas}`);
+    console.log(`   • Transacciones fallidas: ${resultado.resumen.transacciones_fallidas}`);
+    console.log(`   • Eliminación completa: ${resultado.resumen.eliminacion_exitosa ? 'SÍ' : 'NO'}`);
+    console.log(`   • Tiempo total: ${resultado.resumen.tiempo_total_seg}s`);
+
+    return resultado;
+    
+  } catch (error) {
+    console.error('💥 Error fatal en eliminación SGA:', error.message);
+    
+    resultado.transacciones.push({
+      tipo: 'SYSTEM_ERROR',
+      error: error.message,
+      estado: 'ROLLED_BACK',
+      timestamp: new Date().toISOString()
+    });
+    
+    throw error;
+    
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+        console.log('🔌 Conexión de base de datos cerrada correctamente');
+      } catch (err) {
+        console.error('❌ Error cerrando conexión:', err.message);
+      }
+    }
+  }
+}
+
+// ===== FUNCIONES UTILITARIAS ADICIONALES =====
+
+// Función para verificar el estado del sistema SGA
+async function verificarEstadoSistema() {
+  let connection;
+  
+  try {
+    connection = await getConnection();
+    
+    const operacionVerificacion = async (conn) => {
+      // Contar tablas SGA
+      const tablasSGA = await conn.execute(`
+        SELECT COUNT(*) as TOTAL_TABLAS_SGA 
+        FROM USER_TABLES 
+        WHERE TABLE_NAME LIKE 'SGA_%'
+      `);
+
+      // Contar registros en tablas principales
+      const registrosTotales = await conn.execute(`
+        SELECT 
+          (SELECT COUNT(*) FROM SGA_PAIS WHERE DELETED = 0) as PAISES,
+          (SELECT COUNT(*) FROM SGA_AEROPUERTO WHERE DELETED = 0) as AEROPUERTOS,
+          (SELECT COUNT(*) FROM SGA_AEROLINEA WHERE DELETED = 0) as AEROLINEAS,
+          (SELECT COUNT(*) FROM SGA_AVION WHERE DELETED = 0) as AVIONES
+        FROM DUAL
+      `);
+      
+      return {
+        tablas_sga: tablasSGA.rows[0][0],
+        datos: {
+          paises: registrosTotales.rows[0][0],
+          aeropuertos: registrosTotales.rows[0][1], 
+          aerolineas: registrosTotales.rows[0][2],
+          aviones: registrosTotales.rows[0][3]
+        }
+      };
+    };
+
+    const resultado = await ejecutarConTransaccion(
+      connection, 
+      operacionVerificacion, 
+      'Verificación del estado del sistema SGA'
+    );
+
+    if (resultado.exito) {
+      console.log('📊 Estado del Sistema SGA:');
+      console.log(`   • Tablas SGA: ${resultado.resultado.tablas_sga}`);
+      console.log(`   • Países: ${resultado.resultado.datos.paises}`);
+      console.log(`   • Aeropuertos: ${resultado.resultado.datos.aeropuertos}`);
+      console.log(`   • Aerolíneas: ${resultado.resultado.datos.aerolineas}`);
+      console.log(`   • Aviones: ${resultado.resultado.datos.aviones}`);
+      
+      return resultado.resultado;
+    } else {
+      throw new Error(`Error en verificación: ${resultado.error}`);
+    }
+    
+  } finally {
+    if (connection) {
+      await connection.close();
+    }
+  }
+}
+
+// Función para limpiar datos manteniendo estructura (borrado lógico masivo)
+async function limpiarDatosSistema() {
+  let connection;
+  
+  try {
+    connection = await getConnection();
+    console.log('🧹 Iniciando limpieza de datos del sistema SGA (borrado lógico)...');
+    
+    const operacionLimpieza = async (conn) => {
+      const tablas = [
+        'SGA_USUARIO', 'SGA_RESERVA', 'SGA_PASAJERO', 'SGA_EMPLEADO',
+        'SGA_VUELO', 'SGA_PROGRAMA_VUELO', 'SGA_AVION', 'SGA_AEROLINEA', 'SGA_AEROPUERTO'
+      ];
+      
+      let totalAfectados = 0;
+      
+      for (const tabla of tablas) {
+        try {
+          const resultado = await conn.execute(`
+            UPDATE ${tabla} 
+            SET DELETED = 1, FECHA_ELIMINACION = SYSDATE 
+            WHERE DELETED = 0
+          `);
+          
+          if (resultado.rowsAffected > 0) {
+            console.log(`🧹 ${tabla}: ${resultado.rowsAffected} registros marcados como eliminados`);
+            totalAfectados += resultado.rowsAffected;
+          }
+        } catch (error) {
+          if (!error.message.includes('ORA-00942')) {
+            console.log(`⚠️  Error limpiando ${tabla}: ${error.message}`);
+          }
+        }
+      }
+      
+      return { total_registros_afectados: totalAfectados };
+    };
+
+    const resultado = await ejecutarConTransaccion(
+      connection, 
+      operacionLimpieza, 
+      'Limpieza masiva de datos SGA'
+    );
+
+    if (resultado.exito) {
+      console.log(`✅ Limpieza completada: ${resultado.resultado.total_registros_afectados} registros afectados`);
+      return resultado.resultado;
+    } else {
+      throw new Error(`Error en limpieza: ${resultado.error}`);
+    }
     
   } finally {
     if (connection) {
@@ -1223,8 +1671,19 @@ async function eliminarTodasLasTablas() {
 }
 
 module.exports = {
+  // Funciones principales
   inicializarBaseDatos,
   eliminarTodasLasTablas,
+  
+  // Funciones utilitarias ACID
+  ejecutarConTransaccion,
+  verificarEstadoSistema,
+  limpiarDatosSistema,
+  
+  // Esquemas y datos
   TABLAS_SCHEMA,
-  DATOS_INICIALES
+  DATOS_INICIALES,
+  
+  // Funciones de verificación
+  verificarTablaExiste
 };
