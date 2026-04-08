@@ -19,7 +19,7 @@ Object.entries(ENTITY_CONFIG).forEach(([entityKey, config]) => {
   
   if (controller) {
     // Crear rutas estándar CRUD
-    const entityRoutes = createEntityRoutes(controller, `/${entityKey}`);
+    const entityRoutes = createEntityRoutes(controller);
     router.use(`/sga/${entityKey}`, entityRoutes);
   }
 });

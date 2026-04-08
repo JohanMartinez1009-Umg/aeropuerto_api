@@ -46,7 +46,7 @@ class BaseModel {
       }
       
       const result = await connection.execute(sql, params, {
-        outFormat: 1 // OUT_FORMAT_OBJECT
+        outFormat: 4002 // OUT_FORMAT_OBJECT
       });
       
       return result.rows;
@@ -66,7 +66,7 @@ class BaseModel {
       const result = await connection.execute(
         `SELECT * FROM ${this.tableName} WHERE ${this.primaryKey} = :id AND DELETED = 0`,
         [id],
-        { outFormat: 1 }
+        { outFormat: 4002 }
       );
       
       return result.rows[0] || null;
@@ -103,7 +103,7 @@ class BaseModel {
       sql += ` WHERE ${conditions.join(' AND ')}`;
       
       const result = await connection.execute(sql, params, {
-        outFormat: 1
+        outFormat: 4002
       });
       
       return result.rows[0].TOTAL;
@@ -171,7 +171,7 @@ class BaseModel {
       const existing = await connection.execute(
         `SELECT * FROM ${this.tableName} WHERE ${this.primaryKey} = :id AND DELETED = 0`,
         [id],
-        { outFormat: 1 }
+        { outFormat: 4002 }
       );
       
       if (existing.rows.length === 0) {
@@ -265,7 +265,7 @@ class BaseModel {
       const existing = await connection.execute(
         `SELECT * FROM ${this.tableName} WHERE ${this.primaryKey} = :id`,
         [id],
-        { outFormat: 1 }
+        { outFormat: 4002 }
       );
       
       if (existing.rows.length === 0) {
@@ -338,7 +338,7 @@ class BaseModel {
       }
       
       const result = await connection.execute(sql, params, {
-        outFormat: 1
+        outFormat: 4002
       });
       
       return result.rows;
@@ -382,7 +382,7 @@ class BaseModel {
       }
       
       const result = await connection.execute(sql, params, {
-        outFormat: 1
+        outFormat: 4002
       });
       
       return result.rows;
@@ -416,7 +416,7 @@ class BaseModel {
       }
       
       const result = await connection.execute(sql, params, {
-        outFormat: 1
+        outFormat: 4002
       });
       
       return result.rows[0].TOTAL;
@@ -493,7 +493,7 @@ class BaseModel {
         const existing = await connection.execute(
           `SELECT * FROM ${this.tableName} WHERE ${this.primaryKey} = :id AND DELETED = 0`,
           [id],
-          { outFormat: 1 }
+          { outFormat: 4002 }
         );
         
         if (existing.rows.length === 0) {
@@ -549,7 +549,7 @@ class BaseModel {
     if (useTransaction) {
       const operacion = async (connection) => {
         const result = await connection.execute(sql, params, {
-          outFormat: 1
+          outFormat: 4002
         });
         
         return result.rows;
@@ -572,7 +572,7 @@ class BaseModel {
         connection = await getConnection();
         
         const result = await connection.execute(sql, params, {
-          outFormat: 1
+          outFormat: 4002
         });
         
         return result.rows;
@@ -603,7 +603,7 @@ class BaseModel {
           SUM(CASE WHEN DELETED = 0 THEN 1 ELSE 0 END) as REGISTROS_ACTIVOS,
           SUM(CASE WHEN DELETED = 1 THEN 1 ELSE 0 END) as REGISTROS_ELIMINADOS
         FROM ${this.tableName}
-      `, [], { outFormat: 1 });
+      `, [], { outFormat: 4002 });
       
       return {
         tabla: this.tableName,
