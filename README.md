@@ -102,26 +102,40 @@ DELETE /sga/eliminar-todo     # Eliminar todas las tablas
 
 ### 🛩️ **Operaciones CRUD Estándar**
 
-Cada entidad sigue el patrón REST estándar:
+Cada entidad sigue el patrón REST estándar con **borrado lógico implementado**:
 
 ```bash
-# Listar todos
-GET /sga/{entidad}
+# Operaciones principales (solo registros activos)
+GET /sga/{entidad}              # Listar todos los activos
+GET /sga/{entidad}/{id}         # Obtener por ID (solo activos)
+POST /sga/{entidad}             # Crear nuevo
+PUT /sga/{entidad}/{id}         # Actualizar
+DELETE /sga/{entidad}/{id}      # Eliminar (borrado lógico)
+GET /sga/{entidad}/count        # Contar registros activos
 
-# Obtener por ID
-GET /sga/{entidad}/{id}
+# Gestión de registros eliminados
+GET /sga/{entidad}/all-including-deleted    # Ver todos incluyendo eliminados
+GET /sga/{entidad}/deleted                  # Ver solo eliminados
+GET /sga/{entidad}/deleted/count           # Contar eliminados
+PUT /sga/{entidad}/{id}/restore            # Restaurar eliminado
+DELETE /sga/{entidad}/{id}/force           # Eliminar permanentemente
+```
 
-# Crear nuevo
-POST /sga/{entidad}
+### 🗑️ **Sistema de Borrado Lógico**
 
-# Actualizar
-PUT /sga/{entidad}/{id}
+El sistema implementa borrado lógico para mantener integridad histórica:
 
-# Eliminar
-DELETE /sga/{entidad}/{id}
+- **DELETED**: Campo booleano (0 = activo, 1 = eliminado)
+- **FECHA_ELIMINACION**: Timestamp del borrado
+- **Consultas por defecto**: Solo muestran registros activos
+- **Restauración**: Posibilidad de recuperar datos eliminados
 
-# Contar registros
-GET /sga/{entidad}/count
+```bash
+# Ejemplos de uso del borrado lógico
+DELETE /sga/pasajero/123        # Marca como eliminado
+GET /sga/pasajero/deleted       # Ve pasajeros eliminados
+PUT /sga/pasajero/123/restore   # Restaura pasajero
+DELETE /sga/pasajero/123/force  # Elimina permanentemente
 ```
 
 ### 📋 **Entidades Disponibles**

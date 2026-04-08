@@ -141,6 +141,128 @@ class BaseController {
       });
     }
   }
+
+  // ===== MÉTODOS PARA BORRADO LÓGICO =====
+
+  // Obtener todos los registros incluyendo eliminados
+  async getAllIncludingDeleted(req, res) {
+    try {
+      const { limit, orderBy, ...where } = req.query;
+      
+      const options = {};
+      if (limit) options.limit = parseInt(limit);
+      if (orderBy) options.orderBy = orderBy;
+      if (Object.keys(where).length > 0) options.where = where;
+
+      const records = await this.model.findAllIncludingDeleted(options);
+
+      res.json({
+        success: true,
+        data: records,
+        total: records.length,
+        message: `${this.entityName} obtenidos incluyendo eliminados`,
+        entity: this.entityName
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: `Error al obtener ${this.entityName} incluyendo eliminados`,
+        error: error.message
+      });
+    }
+  }
+
+  // Obtener solo registros eliminados
+  async getDeleted(req, res) {
+    try {
+      const { limit, orderBy, ...where } = req.query;
+      
+      const options = {};
+      if (limit) options.limit = parseInt(limit);
+      if (orderBy) options.orderBy = orderBy;
+      if (Object.keys(where).length > 0) options.where = where;
+
+      const records = await this.model.findDeleted(options);
+      const total = await this.model.countDeleted(where);
+
+      res.json({
+        success: true,
+        data: records,
+        total,
+        message: `${this.entityName} eliminados obtenidos`,
+        entity: this.entityName
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: `Error al obtener ${this.entityName} eliminados`,
+        error: error.message
+      });
+    }
+  }
+
+  // Restaurar un registro eliminado
+  async restore(req, res) {
+    try {
+      const { id } = req.params;
+      const result = await this.model.restore(id);
+
+      res.json({
+        success: true,
+        message: `${this.entityName} restaurado exitosamente`,
+        entity: this.entityName
+      });
+    } catch (error) {
+      const status = error.message.includes('no encontrado') ? 404 : 400;
+      res.status(status).json({
+        success: false,
+        message: `Error al restaurar ${this.entityName}`,
+        error: error.message
+      });
+    }
+  }
+
+  // Eliminar permanentemente un registro
+  async forceDelete(req, res) {
+    try {
+      const { id } = req.params;
+      const result = await this.model.forceDelete(id);
+
+      res.json({
+        success: true,
+        message: `${this.entityName} eliminado permanentemente`,
+        entity: this.entityName
+      });
+    } catch (error) {
+      const status = error.message === 'Registro no encontrado' ? 404 : 400;
+      res.status(status).json({
+        success: false,
+        message: `Error al eliminar permanentemente ${this.entityName}`,
+        error: error.message
+      });
+    }
+  }
+
+  // Contar registros eliminados
+  async countDeleted(req, res) {
+    try {
+      const where = req.query;
+      const total = await this.model.countDeleted(where);
+
+      res.json({
+        success: true,
+        data: { total },
+        message: `Total de ${this.entityName} eliminados`,
+        entity: this.entityName
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: `Error al contar ${this.entityName} eliminados`,
+        error: error.message
+      });
+    }
+  }
 }
 
 module.exports = BaseController;
