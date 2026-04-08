@@ -346,7 +346,7 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) par
 ## 👨‍💻 **Desarrollado por**
 
 Proyecto de base de datos para Sistema de Gestión Aeroportuaria  
-Universidad Mesoamericana - Ingeniería en Sistemas  
+Universidad Mariano Galvez - Ingeniería en Sistemas  
 
 ---
 
